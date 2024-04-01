@@ -1,0 +1,1 @@
+BadAssMacros.exe -i ./tcpshell.bin -w doc -p no -s indirect -o ./macro.txt
